@@ -1,5 +1,5 @@
 # Collection of Azure-CLI automations
-## Deploy Azure VM, install Windows 10, SSMA and SSMS (In one go)
+## Deploy Azure VM, install Windows 10, SSMA, SSMS and Oracle Instantclient 19c (In one go)
 ### Pre-requisites
 - Update crazvmssma.env file with Azure VM specifications (see crazvmssma.env)
 - Run crazvmssma.sh script on Linux (bash script), the env file above must be located on the same directoy as the bash script
@@ -23,7 +23,7 @@ DATADISKSIZE=64
 VMIMAGE=MicrosoftWindowsDesktop:Windows-10:19h1-pro:18362.1256.2012032308
 VMSIZE=Standard_D2s_v3
 </pre>
-### Deploy Azure VM
+### Deploy Azure VM and install SSMS, SSMA and Oracle Instantclient 19c
 <pre>
 ./crazvmssma.sh
 </pre>
