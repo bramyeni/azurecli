@@ -26,3 +26,8 @@ VMSIZE=Standard_D2s_v3
 <pre>
 ./crazvmssma.sh
 </pre>
+
+## Deploy Azure SQL Pool Synapse (Formerly SQL Datawarehouse)
+### Pre-requisites
+- Update crazsqldw.env file with Azure VM specifications (see crazsqldw.env)
+- Run crazsqldw.sh script on Linux (bash script), the env file above must be located on the same directoy as the bash script
