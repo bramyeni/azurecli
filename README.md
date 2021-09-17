@@ -5,6 +5,7 @@
 - Run crazvmssma.sh script on Linux (bash script), the env file above must be located on the same directoy as the bash script
 
 E.g:
+<pre>
 VMNAME=BRAMVMSSMA
 #when using VNET from other resource group, use format such as: VNET:OHTER_RESOURCEGROUP
 VNET=bramvm-vnet
@@ -21,7 +22,7 @@ DATADISKSIZE=64
 #CentOS,CoreOS,Debian,openSUSE-Leap,RHEL,SLES,UbuntuLTS,Win2019Datacenter,Win2016Datacenter,Win2012R2Datacenter,Win2012Datacenter,Win2008R2SP1,Windows-10
 VMIMAGE=MicrosoftWindowsDesktop:Windows-10:19h1-pro:18362.1256.2012032308
 VMSIZE=Standard_D2s_v3
-
+</pre>
 ### Deploy Azure VM
 <pre>
 ./crazvmssma.sh
