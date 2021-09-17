@@ -3,7 +3,6 @@
 ### Pre-requisites
 - Update crazvmssma.env file with Azure VM specifications (see crazvmssma.env)
 - Run crazvmssma.sh script on Linux (bash script), the env file above must be located on the same directoy as the bash script
-- 
 
 E.g:
 VMNAME=BRAMVMSSMA
