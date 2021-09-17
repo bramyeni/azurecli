@@ -31,3 +31,9 @@ VMSIZE=Standard_D2s_v3
 ### Pre-requisites
 - Update crazsqldw.env file with Azure VM specifications (see crazsqldw.env)
 - Run crazsqldw.sh script on Linux (bash script), the env file above must be located on the same directoy as the bash script
+
+
+## Deploy Azure VM (either Windows or Linux VM)
+### Pre-requisites
+- Update createazvm.env file with Azure VM specifications (see createazvm.env)
+- Run createazvm.sh script on Linux (bash script), the env file above must be located on the same directoy as the bash script
