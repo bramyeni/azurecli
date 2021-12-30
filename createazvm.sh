@@ -1,10 +1,10 @@
 #!/bin/bash
-# $Id: createazvm.sh 361 2020-10-27 11:36:11Z bpahlawa $
+# $Id: createazvm.sh 440 2021-12-30 10:11:13Z bpahlawa $
 # initially created by Bram Pahlawanto 25-June-2020
 # $Author: bpahlawa $
 # Modified by: bpahlawa
-# $Date: 2020-10-27 19:36:11 +0800 (Tue, 27 Oct 2020) $
-# $Revision: 361 $
+# $Date: 2021-12-30 18:11:13 +0800 (Thu, 30 Dec 2021) $
+# $Revision: 440 $
 
 LOGFILE=/tmp/$0.log
 THISVM=$(hostname)
@@ -21,8 +21,13 @@ dig 2>>$LOGFILE 1>/dev/null
 [[ ! -f ${SCRIPTNAME}.env ]] && echo "${SCRIPTNAME}.env parameter file doesnt exists... exiting... " | tee -a $LOGFILE && exit 1
 . ${SCRIPTNAME}.env
 
+
 typeset -l VMNAME
 [[ "$1" != "" ]] && VMNAME="$1" || VMNAME=${VMNAME}
+
+LOGFILE=/tmp/${0}-${VMNAME}.log
+
+mv /tmp/$0.log $LOGFILE
 
 NSGNAME="${VMNAME}_nsg"
 NICNAME="${VMNAME}_nic"
@@ -40,9 +45,15 @@ then
    [[ $? -ne 0 ]] && echo -e "\nFailed to install az command....exiting..." | tee -a $LOGFILE && exit 1
 
 else
-  echo -e " OK\n"
+  az config set auto-upgrade.enable=yes
+  az config set auto-upgrade.prompt=no
+  if [ $? -ne 0 ]
+  then
+     echo -e "az is already the latest version.."
+  else
+     echo -e " OK\n"
+  fi
 fi
-
 export PATH=$(pwd)/bin:$PATH
 
 echo -n "Checking SUBSCRIPTION $SUBSCRIPTIONID...."
@@ -55,6 +66,18 @@ az account set -s $SID 2>>$LOGFILE 1>/dev/null
 [[ $? -ne 0 ]] && echo -e "\nFailed to run az account set -s $SID ......exiting..." | tee -a $LOGFILE && exit 1
 echo -e " OK\n"
 
+CHECKVM=$(az group show --name $RESOURCEGROUP --output table | grep "Run \`az login\`")
+
+if [ "$CHECKVM" != "" ]
+then
+  echo -n "Trying to perform Device login...."
+  az login
+  [[ $? -ne 0 ]] && echo -e " Failed!\nUnable to login !!.. exiting... " && exit 1
+  az account set -s $SID 2>>$LOGFILE 1>/dev/null
+  [[ $? -ne 0 ]] && echo -e "\nFailed to run az account set -s $SID ......exiting..." | tee -a $LOGFILE && exit 1
+  echo -e " OK\n"
+fi
+
 if [ "$RESOURCEGROUP" = "" ]
 then
    echo -n "Retrieving Resource Group from current VM $THISVM...."
@@ -65,8 +88,20 @@ then
 else
    echo -n "Checking Resource Group $RESOURCEGROUP...."
    az group show --name $RESOURCEGROUP --output table 2>>$LOGFILE 1>/dev/null
-   [[ $? -ne 0 ]] && echo -e "\nResource Group $RESOURCEGROUP doesnt exits.. exiting..." && exit 1
-   echo -e " OK\n"
+   if [ $? -ne 0 ]
+   then
+       ERRMSG=$(tail -4 $LOGFILE | grep "To re-authenticate,")
+       if [ "$ERRMSG" != "" ]
+       then
+          echo -e "\nError message $ERRMSG..."
+          echo -e "\nTrying to run do az login..."
+          az login
+       else
+          echo -e "\nResource Group $RESOURCEGROUP doesnt exits.. exiting..." && exit 1
+       fi
+   else
+       echo -e " OK\n"
+   fi
 fi
 
 echo -n "Checking whether VM $VMNAME is available....." 
@@ -121,7 +156,7 @@ then
 
    echo -n "Retrieving SUBNET information from current VM $THISVM...."
    CURRSUBNET=`echo $NICID | awk -F'/' '{print $(NF)}'`
-   echo -e " $CURRSUBNET...\n"
+   [[ "$CURRSUBNET" = "" ]] && echo -e " Failed! (on-prem VM)\n" || echo -e " $CURRSUBNET...\n"
    if [ "$SUBNET" = "" ]
    then
       [[ "$CURRSUBNET" = "" ]] && echo "Unable to find SUBNET from either config or current VM...exiting..." && exit 1
@@ -142,6 +177,8 @@ then
              az network vnet subnet create -n $SUBNET -g $RESOURCEGROUP --vnet-name $VNET --address-prefix $ADDRPREFIX 2>>$LOGFILE 1>/dev/null
              [[ $? -ne 0 ]] && echo -e "\nFaild to create SUBNET $SUBNET...exiting..." && exit 1 || echo -e " OK\n"
          fi
+      else
+         echo -e " OK\n"
       fi
 
    fi
@@ -217,6 +254,7 @@ then
        fi
 
        echo "Creating Azure Linux VM $VMNAME...."
+       az vm image terms accept --urn $VMIMAGE 2>>$LOGFILE 1>/dev/null
        az vm create --name $VMNAME \
              --resource-group $RESOURCEGROUP \
              --admin-password $ADMINPASSWORD  \
@@ -242,9 +280,14 @@ then
               if [ "$ANS" = "y" ]
               then
                  echo -e "Gathering list of all Azure Windows VM image.. it may take a while.. please wait.."
-                 echo -e "The output list will also be written into logfile $LOGFILE ..."
+                 echo -e "The output list will also be written into logfile ${LOGFILE}-CENTOS ${LOGFILE}-DEBIAN ${LOGFILE}-UBUNTU ${LOGFILE}-SUSE ..."
                  echo -e "Once you have found the image, then set VMIMAGE=the-urn-value within ${SCRIPTNAME}.env file, then re-run this script"
-                 az vm image list --query "[?contains(urn,'linux') || contains(urn,'centos') || contains(urn,'debian') || contains(urn,'ubuntu') || contains(urn,'suse')]" --all -o table 2>&1 | tee -a $LOGFILE
+                 az vm image list -f CentOS --all -o table 2>&1 | tee -a ${LOGFILE}-CENTOS.txt &
+                 az vm image list -f Debian --all -o table 2>&1 | tee -a ${LOGFILE}-DEBIAN.txt &
+                 az vm image list -f Ubuntu --all -o table 2>&1 | tee -a ${LOGFILE}-UBUNTU.txt &
+                 az vm image list -f Suse --all -o table 2>&1 | tee -a ${LOGFILE}-SUSE.txt
+
+                 #az vm image list --query "[?contains(urn,'linux') || contains(urn,'centos') || contains(urn,'debian') || contains(urn,'ubuntu') || contains(urn,'suse')]" --all -o table 2>&1 | tee -a $LOGFILE
                  echo -e "Exiting.. "
                  exit 1
              fi
@@ -367,28 +410,59 @@ else
    ssh -o "StrictHostKeyChecking no" ${ADMINUSER}@${FULLVMNAME} "hostname;who am i"
    if [ $? -ne 0 ]
    then
-      ssh -o "StrictHostKeyChecking no" ${ADMINUSER}@${FULLVMNAME} "
-      echo $ADMINPASSWORD | sudo -S su - root -c \"[[ ! -d /root/.ssh ]] && mkdir /root/.ssh ; cp -f \$HOME/.ssh/authorized_keys /root/.ssh \"
-"
-      [[ $? -ne 0 ]] && echo -e "\nError connecting VM $VMNAME ( $FULLVMNAME ).... " && exit 1
-      echo -e "OK\n"
-   else
-      echo -e "OK\n"
+      echo "Error in connecting to ${ADMINUSER}@${FULLVMNAME} , it could be that ssh public file was not setup/copied properly!"
+      echo "Try specifying password...."
    fi
+   ssh -o "StrictHostKeyChecking no" ${ADMINUSER}@${FULLVMNAME} "
+echo \"$ADMINPASSWORD\" | sudo -S su - root -c \"[[ ! -d /root/.ssh ]] && mkdir /root/.ssh ; cp -f \$HOME/.ssh/authorized_keys /root/.ssh \"
+"
+   [[ $? -ne 0 ]] && echo -e "\nError connecting VM $VMNAME ( $FULLVMNAME ).... " && exit 1
+   echo -e "OK\n"
 
-   echo -n "Creating /opt filesyste on Linux VM $VMNAME using remote shell..."
-ssh -o "StrictHostKeyChecking no" root@${FULLVMNAME} "
+   echo -n "Trying to run remote command as root to $FULLVMNAME ...."
+   ssh -o "StrictHostKeyChecking no" root@${FULLVMNAME} "echo BRAMPAHL1TO##" >>$LOGFILE 2>&1
+   if [ $(tail -3 $LOGFILE | grep "BRAMPAHL1TO##" | wc -l) -eq 0 ]
+   then
+      ERRMSG=$(tail -3 $LOGFILE | grep "Please login as the user ")
+      echo -n "$ERRMSG ...."
+      if [ "$ERRMSG" != "" ]
+      then
+         THEUSER=$(echo "$ERRMSG" | sed "s/.*Please login as the user \"\([a-zA-Z0-9]\+\)\" .*/\1/g")
+         echo -n "Creating /opt filesystem on Linux VM $VMNAME using user $THEUSER remotely..."
+         ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
 set -x
-DISK=\`lsblk -o NAME | grep -Ev \"\$(blkid | sed \"s/^\/dev\/\([a-zA-Z]\+\).*/\1/g\")|sr0|fd0\" | tail -1\`
+DISK=\`sudo lsblk -no NAME | grep -Ev \"\$(sudo blkid | sed \"s/^\/dev\/\([a-zA-Z]\+\).*/\1/g\")|sr0|fd0\" | tail -1\`
+if [ \"\$DISK\" != \"\" ]
+then
+   echo \"Creating /opt disk....\"
+   echo yes | sudo mkfs.ext4 /dev/\$DISK
+   echo \"/dev/\$DISK /opt ext4 defaults 0 0\" | sudo tee -a /etc/fstab
+fi
+sudo mount /opt
+"
+         [[ $? -ne 0 ]] && echo -e "\nError creating filesystem /opt on VM $VMNAME ( $FULLVMNAME ).... " && exit 1
+         echo -e "mounting /opt filesystem..... OK\n"
+         echo -e "\nLinux VM $VMNAME has been deployed successfully...\n"
+
+             
+      else
+         echo -n "Unable to create /opt filesystem on Linux VM $VMNAME using remote shell...you can do it manually!!"
+      fi
+   else
+      echo -n "Creating /opt filesystem on Linux VM $VMNAME using remote shell..."
+      ssh -o "StrictHostKeyChecking no" root@${FULLVMNAME} "
+set -x
+DISK=\`lsblk -no NAME | grep -Ev \"\$(blkid | sed \"s/^\/dev\/\([a-zA-Z]\+\).*/\1/g\")|sr0|fd0\" | tail -1\`
 if [ \"\$DISK\" != \"\" ]
 then
    echo \"Creating /opt disk....\"
    echo yes | mkfs.ext4 /dev/\$DISK
    echo \"/dev/\$DISK /opt ext4 defaults 0 0\" >> /etc/fstab
-   mount /opt
 fi
+mount /opt
 "
-   [[ $? -ne 0 ]] && echo -e "\nError creating filesystem /opt on VM $VMNAME ( $FULLVMNAME ).... " && exit 1
-   echo -e "OK\n"
-   echo -e "\nLinux VM $VMNAME has been deployed successfully...\n"
+      [[ $? -ne 0 ]] && echo -e "\nError creating filesystem /opt on VM $VMNAME ( $FULLVMNAME ).... " && exit 1
+      echo -e "Mounting /opt filesystem... OK\n"
+      echo -e "\nLinux VM $VMNAME has been deployed successfully...\n"
+   fi
 fi
