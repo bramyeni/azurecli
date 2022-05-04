@@ -22,6 +22,19 @@ Any of the following Azure-cli will perform fully automated installation end to 
 - Fully automated installation of cubefs master and worker nodes
 - Fully automated installation of kubernetes (crio library) with 1 master node and configurable no of worker nodes
 
+### Deploy Kubernetes with 100 worker nodes
+- Modified createazvm.addon.installk8s to have the following
+<pre>
+export K8SMASTER=lxmaster
+export K8SNODE=lxworker
+export NOOFWORKERS=100
+</pre>
+- Ensure there is no other addon script apart from createazvm.addon.installk8s, if there is other script with format createazvm.addon.xxxx then this script will be run as well (so be very careful having createazvm.addon.xxxx that is not intendedly to be run, if this exists rename it to createazvm.backup.xxxx or something like that)
+- Run the script and deploy temp VM let say: lxmonitor
+<pre>
+./createazvm.sh lxmonior
+</pre>
+NOTE: this process will run as it explained above, so there will be lxmonitor, lxmaster and lxworker1 upto lxworker100 ready to run, the lxmonitor then can be deleted or it can be kept as a jumpbox 
 
 ## Deploy Azure VM, install Windows 10, SSMA, SSMS and Oracle Instantclient 19c (In one go)
 ### Pre-requisites
