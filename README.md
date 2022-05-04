@@ -3,6 +3,8 @@
 Any of the following Azure-cli will perform fully automated installation end to end until the environment is ready to use, the automation steps can be divided into the following:
 - Based on createazvm.env, it will retrieve all necessary information to deploy VM on azure such as subscription, resource group, vnet, etc
 - If some components are not available, then the script will create them automatically, such as: resource group, vnet, network interface and VM
+- Initially, it will deploy 1 VM as a place to run copied createazvm.sh to deploy those master and worker nodes (as a deployer VM, this is to speed up process as the connection back and forth from on-prem to azure will be slower then having 1 dedicated VM as deployer and in fact it can use the same subnet mask to deploy those multiple VMs)
+- The deployer VM will then run createazvm.sh based on the information that is provided in addon script
 - After the VM is fully created/deployed and in running state, then the addon script(s) will be executed to perform any post-deployment activities
 - One of the addons that is available here will install kubernetes master and N number of worker nodes, let say you have specified 1 master and 100 worker nodes then the script will create 101 VM and then use 1 node as a master (name must be set on addon script under variable name K8SMASTER) and 100 worker nodes (the base name must be specified on addon script under variable name K8SNODE E.g: lxworker, then it will create lxworker1, lxwoker2 until lxworker100)
 - The kubernetes installation script setup-k8scrio.sh has been encoded into base64 and it is included into the addon script which will be executed after 101 VM nodes are completely deployed
