@@ -1,0 +1,312 @@
+# $Id: createazvm.addon.cubefs 445 2022-03-28 11:27:23Z bpahlawa $
+# initially created by Bram Pahlawanto 25-June-2020
+# This is the list of parameters to deploy VM and SQL BDC fully automated
+# $Author: bpahlawa $
+# Modified by: bpahlawa
+# $Date: 2022-03-28 19:27:23 +0800 (Mon, 28 Mar 2022) $
+# $Revision: 445 $
+
+export THEUSER
+export FULLVMNAME
+
+
+remote_cubefs_config()
+{
+export DISKSIZE=10737418240
+export CLUSTERNAME=cubefscluster
+export METANODEMEM=8589934592
+export METANODERESMEM=1073741824
+}
+
+creating_disk()
+{
+   echo -n "Creating /data0 filesystem on Linux VM $VMNAME using user $THEUSER remotely..."
+   ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
+set -x
+   [[ \$(mount | grep \"data0 \" | grep -v grep | wc -l) -ne 0 ]] && echo \"mountpoint data0 has been created!!\" && exit 1
+DISK=\`sudo lsblk -no NAME | grep -Ev \"\$(sudo blkid | sed \"s/^\/dev\/\([a-zA-Z]\+\).*/\1/g\")|sr0|fd0\" | tail -1\`
+if [ \"\$DISK\" != \"\" ]
+then
+   echo \"Creating /data0 disk....\"
+   mkdir -p /data0
+   echo yes | sudo mkfs.xfs /dev/\$DISK
+   echo \"/dev/\$DISK /data0 xfs defaults 0 0\" | sudo tee -a /etc/fstab
+fi
+sudo mount /data0
+if [ \$? -ne 0 ]
+then
+   echo \"Error creating filesystem /data0 on VM $VMNAME ( $FULLVMNAME ).... \" 
+   exit 1
+else
+   echo \"mounting /data0 filesystem..... OK\"
+   echo \"/data0 has been created and mounted successfully...\"
+fi
+"
+
+}
+
+generate_ssh_key()
+{
+    ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
+set -x
+hostname
+[[ ! -f ~/.ssh/id_rsa ]] && ssh-keygen -f ~/.ssh/id_rsa -N \"\" || echo \"id_rsa and id_rsa.pub have been generated!!\"
+"
+}
+
+
+install_packages()
+{
+   ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
+set -x
+hostname
+apt-get update
+apt-get -y upgrade
+apt-get install -y git cmake g++ bzip2 maven zlib1g zlib1g-dev libbz2-dev
+if [ ! -f go1.17.7.linux-amd64.tar.gz ]
+then
+   wget https://dl.google.com/go/go1.17.7.linux-amd64.tar.gz
+   tar xvfz go1.17.7.linux-amd64.tar.gz
+fi
+
+if [ ! -d /usr/local/go ]
+then
+   mv go /usr/local
+fi
+
+echo \"export GOROOT=/usr/local/go\" >> ~/.bash_profile
+echo \"export PATH=\$PATH:\\\$GOROOT/bin\" >> ~/.bash_profile
+source  ~/.bash_profile
+git clone https://github.com/cubeFS/cubefs.git
+cd cubefs
+make
+[[ ! -d /usr/local/cubefs ]] && mkdir -p /usr/local/cubefs && mv ~/cubefs/build/bin/* /usr/local/cubefs
+"
+}
+
+
+copy_createazvm()
+{
+   scp createazvm.env ${THEUSER}@${FULLVMNAME}:~
+   scp createazvm.sh ${THEUSER}@${FULLVMNAME}:~
+   scp createazvm.addon.cubefs ${THEUSER}@${FULLVMNAME}:~/remotescript.sh
+}
+
+run_createazvm()
+{
+   ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
+set -x
+hostname
+./createazvm.sh lxmaster1
+./createazvm.sh lxmaster2
+./createazvm.sh lxmaster3
+./createazvm.sh lxdatanode1
+./createazvm.sh lxdatanode2
+./createazvm.sh lxdatanode3
+source ~/remotescript.sh
+remote_run
+"
+}
+
+
+remote_configure_master()
+{
+  export THEUSER="$USER"
+  export IPMASTER1=$(ssh -o "StrictHostKeyChecking no" ${THEUSER}@lxmaster1 "hostname -i") 
+  export IPMASTER2=$(ssh -o "StrictHostKeyChecking no" ${THEUSER}@lxmaster2 "hostname -i") 
+  export IPMASTER3=$(ssh -o "StrictHostKeyChecking no" ${THEUSER}@lxmaster3 "hostname -i") 
+   echo "{
+  \"role\": \"master\",
+  \"ip\": \"$IPMASTER1\",
+  \"id\":\"MASTERID\",
+  \"listen\": \"17010\",
+  \"prof\":\"17020\",
+  \"peers\": \"1:$IPMASTER1:17010,2:$IPMASTER2:17010,3:$IPMASTER3:17010\",
+  \"retainLogs\":\"2000\",
+  \"logDir\": \"/usr/local/cubefs/master/log\",
+  \"logLevel\":\"info\",
+  \"walDir\":\"/usr/local/cubefs/master/data/wal\",
+  \"storeDir\":\"/usr/local/cubefs/master/data/store\",
+  \"consulAddr\": \"http://consul.prometheus-cubefs.local\",
+  \"exporterPort\": 9500,
+  \"clusterName\":\"$CLUSTERNAME\",
+  \"metaNodeReservedMem\": \"$METANODERESMEM\"
+}" > /tmp/master.tmp
+
+   scp -r /usr/local/cubefs ${THEUSER}@$IPMASTER1:/usr/local
+   scp -r /usr/local/cubefs ${THEUSER}@$IPMASTER2:/usr/local
+   scp -r /usr/local/cubefs ${THEUSER}@$IPMASTER3:/usr/local
+
+echo "[Unit]
+Description=CubeFS server
+After=network.target
+ConditionPathExists=/usr/local/cubefs
+
+[Service]
+ExecStart= /usr/local/cubefs/cfs-server -c /usr/local/cubefs/master.json
+TimeoutStopSec= 180
+RestartPreventExitStatus=255
+Type=forking
+
+[Install]
+WantedBy=multi-user.target
+Alias=cubefsmaster.service
+" > /usr/local/cubefs/cubefsmaster.service
+
+  ID=1
+  cat /tmp/master.tmp | sed "s/MASTERID/$ID/g" > /usr/local/cubefs/master.json
+  scp /usr/local/cubefs/master.json ${THEUSER}@$IPMASTER1:/usr/local/cubefs
+  ID=$(( ID + 1 ))
+  cat /tmp/master.tmp | sed "s/MASTERID/$ID/g" > /usr/local/cubefs/master.json
+  scp /usr/local/cubefs/master.json ${THEUSER}@$IPMASTER2:/usr/local/cubefs
+  ID=$(( ID + 1 ))
+  cat /tmp/master.tmp | sed "s/MASTERID/$ID/g" > /usr/local/cubefs/master.json
+  scp /usr/local/cubefs/master.json ${THEUSER}@$IPMASTER3:/usr/local/cubefs
+
+  scp /usr/local/cubefs/cubefsmaster.service ${THEUSER}@$IPMASTER1:/lib/systemd/system
+  scp /usr/local/cubefs/cubefsmaster.service ${THEUSER}@$IPMASTER2:/lib/systemd/system
+  scp /usr/local/cubefs/cubefsmaster.service ${THEUSER}@$IPMASTER3:/lib/systemd/system
+
+  ssh -o "StrictHostKeyChecking no" ${THEUSER}@$IPMASTER1 'apt-get update && apt-get -y upgrade && systemctl daemon-reload && systemctl stop cubefsmaster && systemctl enable cubefsmaster && systemctl start cubefsmaster'
+
+  ssh -o "StrictHostKeyChecking no" ${THEUSER}@$IPMASTER2 'apt-get update && apt-get -y upgrade && systemctl daemon-reload && systemctl stop cubefsmaster && systemctl enable cubefsmaster && systemctl start cubefsmaster'
+
+  ssh -o "StrictHostKeyChecking no" ${THEUSER}@$IPMASTER3 'apt-get update && apt-get -y upgrade && systemctl daemon-reload && systemctl stop cubefsmaster && systemctl enable cubefsmaster && systemctl start cubefsmaster'
+
+}
+
+
+remote_configure_datanode()
+{
+  export THEUSER="$USER"
+  export DATANODE1=lxdatanode1
+  export DATANODE2=lxdatanode2
+  export DATANODE3=lxdatanode3
+  export FULLVMNAME=$DATANODE1
+  creating_disk
+  export FULLVMNAME=$DATANODE2
+  creating_disk
+  export FULLVMNAME=$DATANODE3
+  creating_disk
+  scp -r /usr/local/cubefs ${THEUSER}@$DATANODE1:/usr/local
+  scp -r /usr/local/cubefs ${THEUSER}@$DATANODE2:/usr/local
+  scp -r /usr/local/cubefs ${THEUSER}@$DATANODE3:/usr/local
+
+  echo "
+{
+    \"role\": \"metanode\",
+    \"listen\": \"17210\",
+    \"prof\": \"17220\",
+    \"logLevel\": \"info\",
+    \"metadataDir\": \"/usr/local/cubefs/metanode/data/meta\",
+    \"logDir\": \"/usr/local/cubefs/metanode/log\",
+    \"raftDir\": \"/usr/local/cubefs/metanode/data/raft\",
+    \"raftHeartbeatPort\": \"17230\",
+    \"raftReplicaPort\": \"17240\",
+    \"totalMem\":  \"$METANODEMEM\",
+    \"consulAddr\": \"http://consul.prometheus-usr/local/cubefs.local\",
+    \"exporterPort\": 9501,
+    \"masterAddr\": [
+        \"$IPMASTER1:17010\",
+        \"$IPMASTER2:17010\",
+        \"$IPMASTER3:17010\"
+    ]
+}
+" > /usr/local/cubefs/meta.json
+
+  echo "
+{
+  \"role\": \"datanode\",
+  \"listen\": \"17310\",
+  \"prof\": \"17320\",
+  \"logDir\": \"/usr/local/cubefs/datanode/log\",
+  \"raftDir\": \"/usr/local/cubefs/datanode/log\",
+  \"logLevel\": \"info\",
+  \"raftHeartbeat\": \"17330\",
+  \"raftReplica\": \"17340\",
+  \"consulAddr\": \"http://consul.prometheus-cfs.local\",
+  \"exporterPort\": 9502,
+  \"masterAddr\": [
+     \"$IPMASTER1:17010\",
+     \"$IPMASTER2:17010\",
+     \"$IPMASTER3:17010\"
+  ],
+  \"disks\": [
+     \"/data0:$DISKSIZE\"
+  ]
+}
+" > /usr/local/cubefs/datanode.json
+
+echo "[Unit]
+Description=CubeFS Meta server
+After=network.target
+ConditionPathExists=/usr/local/cubefs
+
+[Service]
+ExecStart= /usr/local/cubefs/cfs-server -c /usr/local/cubefs/meta.json
+TimeoutStopSec= 180
+RestartPreventExitStatus=255
+Type=forking
+
+[Install]
+WantedBy=multi-user.target
+Alias=cubefsmeta.service
+" > /usr/local/cubefs/cubefsmeta.service
+
+echo "[Unit]
+Description=CubeFS Data server
+After=network.target
+ConditionPathExists=/usr/local/cubefs
+
+[Service]
+ExecStart= /usr/local/cubefs/cfs-server -c /usr/local/cubefs/datanode.json
+TimeoutStopSec= 180
+RestartPreventExitStatus=255
+Type=forking
+
+[Install]
+WantedBy=multi-user.target
+Alias=cubefsdata.service
+" > /usr/local/cubefs/cubefsdata.service
+
+  scp /usr/local/cubefs/datanode.json ${THEUSER}@$DATANODE1:/usr/local/cubefs
+  scp /usr/local/cubefs/datanode.json ${THEUSER}@$DATANODE2:/usr/local/cubefs
+  scp /usr/local/cubefs/datanode.json ${THEUSER}@$DATANODE3:/usr/local/cubefs
+  scp /usr/local/cubefs/meta.json ${THEUSER}@$DATANODE1:/usr/local/cubefs
+  scp /usr/local/cubefs/meta.json ${THEUSER}@$DATANODE2:/usr/local/cubefs
+  scp /usr/local/cubefs/meta.json ${THEUSER}@$DATANODE3:/usr/local/cubefs
+
+  scp /usr/local/cubefs/cubefsmeta.service ${THEUSER}@$DATANODE1:/lib/systemd/system
+  scp /usr/local/cubefs/cubefsmeta.service ${THEUSER}@$DATANODE2:/lib/systemd/system
+  scp /usr/local/cubefs/cubefsmeta.service ${THEUSER}@$DATANODE3:/lib/systemd/system
+  scp /usr/local/cubefs/cubefsdata.service ${THEUSER}@$DATANODE1:/lib/systemd/system
+  scp /usr/local/cubefs/cubefsdata.service ${THEUSER}@$DATANODE2:/lib/systemd/system
+  scp /usr/local/cubefs/cubefsdata.service ${THEUSER}@$DATANODE3:/lib/systemd/system
+
+  ssh -o "StrictHostKeyChecking no" ${THEUSER}@$DATANODE1 'apt-get update && apt-get -y upgrade && systemctl daemon-reload && systemctl stop cubefsmeta && systemctl enable cubefsmeta && systemctl start cubefsmeta && systemctl stop cubefsdata && systemctl enable cubefsdata && systemctl start cubefsdata'
+
+  ssh -o "StrictHostKeyChecking no" ${THEUSER}@$DATANODE2 'apt-get update && apt-get -y upgrade && systemctl daemon-reload && systemctl stop cubefsmeta && systemctl enable cubefsmeta && systemctl start cubefsmeta && systemctl stop cubefsdata && systemctl enable cubefsdata && systemctl start cubefsdata'
+
+  ssh -o "StrictHostKeyChecking no" ${THEUSER}@$DATANODE3 'apt-get update && apt-get -y upgrade && systemctl daemon-reload && systemctl stop cubefsmeta && systemctl enable cubefsmeta && systemctl start cubefsmeta && systemctl stop cubefsdata && systemctl enable cubefsdata && systemctl start cubefsdata'
+
+
+
+}
+
+remote_run()
+{
+  remote_cubefs_config
+  remote_configure_master
+  remote_configure_datanode
+  
+}
+
+
+run_addon()
+{
+   generate_ssh_key
+   install_packages
+   copy_createazvm
+   run_createazvm
+}
+

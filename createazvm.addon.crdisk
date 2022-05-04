@@ -1,0 +1,32 @@
+# $Id: createazvm.addon.crdisk 445 2022-03-28 11:27:23Z bpahlawa $
+# initially created by Bram Pahlawanto 25-June-2020
+# This is the list of parameters to deploy VM and SQL BDC fully automated
+# $Author: bpahlawa $
+# Modified by: bpahlawa
+# $Date: 2022-03-28 19:27:23 +0800 (Mon, 28 Mar 2022) $
+# $Revision: 445 $
+
+creating_disk()
+{
+   echo -n "Creating /opt filesystem on Linux VM $VMNAME using user $THEUSER remotely..."
+   ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
+set -x
+DISK=\`sudo lsblk -no NAME | grep -Ev \"\$(sudo blkid | sed \"s/^\/dev\/\([a-zA-Z]\+\).*/\1/g\")|sr0|fd0\" | tail -1\`
+if [ \"\$DISK\" != \"\" ]
+then
+   echo \"Creating /opt disk....\"
+   echo yes | sudo mkfs.ext4 /dev/\$DISK
+   echo \"/dev/\$DISK /opt ext4 defaults 0 0\" | sudo tee -a /etc/fstab
+fi
+sudo mount /opt
+"
+   [[ $? -ne 0 ]] && echo -e "\nError creating filesystem /opt on VM $VMNAME ( $FULLVMNAME ).... " && exit 1
+   echo -e "mounting /opt filesystem..... OK\n"
+   echo -e "\n/opt has been created and mounted successfully...\n"
+}
+
+
+run_addon()
+{
+   creating_disk
+}

@@ -1,10 +1,10 @@
 #!/bin/bash
-# $Id: createazvm.sh 440 2021-12-30 10:11:13Z bpahlawa $
+# $Id: createazvm.sh 449 2022-04-29 02:10:08Z bpahlawa $
 # initially created by Bram Pahlawanto 25-June-2020
 # $Author: bpahlawa $
 # Modified by: bpahlawa
-# $Date: 2021-12-30 18:11:13 +0800 (Thu, 30 Dec 2021) $
-# $Revision: 440 $
+# $Date: 2022-04-29 10:10:08 +0800 (Fri, 29 Apr 2022) $
+# $Revision: 449 $
 
 LOGFILE=/tmp/$0.log
 THISVM=$(hostname)
@@ -12,6 +12,7 @@ SCRIPTNAME=${0%.*}
 ISCURRVMAZURE=0
 
 > $LOGFILE
+
 
 
 dig 2>>$LOGFILE 1>/dev/null
@@ -27,14 +28,26 @@ typeset -l VMNAME
 
 LOGFILE=/tmp/${0}-${VMNAME}.log
 
+check_logfile()
+{
+    local ERRMSG="$1"
+    if [ $(egrep "$ERRMSG" $LOGFILE | wc -l) -ne 0 ]
+    then
+       echo "ERR"
+    fi  
+}
+
 mv /tmp/$0.log $LOGFILE
 
 NSGNAME="${VMNAME}_nsg"
 NICNAME="${VMNAME}_nic"
 
+CURRDIR=$(pwd)
+
 echo -n "Checking az command has been installed....."
-[[ -d $(pwd)/bin ]] && export PATH=$(pwd)/bin:$PATH
-az --version
+[[ -d $CURRDIR/bin ]] && export PATH=$CURRDIR/bin:$PATH
+
+az 2>/dev/null 1>/dev/null
 if [ $? -ne 0 ]
 then
    [[ -d ~/lib/azure-cli ]] && rm -rf ~/lib/azure-cli
@@ -45,8 +58,8 @@ then
    [[ $? -ne 0 ]] && echo -e "\nFailed to install az command....exiting..." | tee -a $LOGFILE && exit 1
 
 else
-  az config set auto-upgrade.enable=yes
   az config set auto-upgrade.prompt=no
+  az config set auto-upgrade.enable=yes
   if [ $? -ne 0 ]
   then
      echo -e "az is already the latest version.."
@@ -56,9 +69,33 @@ else
 fi
 export PATH=$(pwd)/bin:$PATH
 
+az --version &
+CTR=1
+PID=$(ps -ef | grep "az --version" | grep -v grep | awk '{print $2}')
+while [ $CTR -lt 10 -a $PID != "" ]
+do
+  CTR=$(( CTR + 1 )) 
+  sleep 3 
+done
+
+if [ $(ps -ef | grep "az --version" | grep -v grep | wc -l) -ne 0 ]
+then
+  [[ "$PID" != "" ]] && kill $PID
+fi
+
+cd $CURRDIR
+
+  
 echo -n "Checking SUBSCRIPTION $SUBSCRIPTIONID...."
-SID=`az account list --output tsv 2>>$LOGFILE | grep $SUBSCRIPTIONID | awk '{print $3}'`
-[[ "$SID" = "" ]] && echo -e "\nSubscription ID $SID is not available...please choose different subscription id.. exiting... " && echo "Your subscription id choices are: " && az account list --output table && az login && [[ $? -ne 0 ]] && echo "Unable to login !!.. exiting... " && exit 1
+SID=`az account list --output tsv 2>>$LOGFILE | grep "$SUBSCRIPTIONID" | awk '{print $3}'`
+while [ "$SID" = "" ]
+do
+   echo -e "\nSubscription ID $SID is not available...trying to relogin..."
+   az login 
+   SID=`az account list --output tsv 2>>$LOGFILE | grep "$SUBSCRIPTIONID" | awk '{print $3}'`
+   [[ $? -ne 0 ]] && echo "Unable to login !!.. exiting... " && exit 1
+   sleep 10
+done
 echo -e " OK\n"
 
 echo -n "Using subscription ID $SID...."
@@ -72,9 +109,9 @@ if [ "$CHECKVM" != "" ]
 then
   echo -n "Trying to perform Device login...."
   az login
-  [[ $? -ne 0 ]] && echo -e " Failed!\nUnable to login !!.. exiting... " && exit 1
+  [[ $? -ne 0 ]] && echo -e " Failed!\nUnable to login !!.. exiting... \n" && exit 1
   az account set -s $SID 2>>$LOGFILE 1>/dev/null
-  [[ $? -ne 0 ]] && echo -e "\nFailed to run az account set -s $SID ......exiting..." | tee -a $LOGFILE && exit 1
+  [[ $? -ne 0 ]] && echo -e "\nFailed to run az account set -s $SID ......exiting...\n" | tee -a $LOGFILE && exit 1
   echo -e " OK\n"
 fi
 
@@ -94,7 +131,7 @@ else
        if [ "$ERRMSG" != "" ]
        then
           echo -e "\nError message $ERRMSG..."
-          echo -e "\nTrying to run do az login..."
+          echo -e "\nTrying to perform az login..."
           az login
        else
           echo -e "\nResource Group $RESOURCEGROUP doesnt exits.. exiting..." && exit 1
@@ -156,7 +193,13 @@ then
 
    echo -n "Retrieving SUBNET information from current VM $THISVM...."
    CURRSUBNET=`echo $NICID | awk -F'/' '{print $(NF)}'`
-   [[ "$CURRSUBNET" = "" ]] && echo -e " Failed! (on-prem VM)\n" || echo -e " $CURRSUBNET...\n"
+   if [ "$CURRSUBNET" = "" ]
+   then
+      echo -e " Failed! (on-prem VM)\n" 
+   else
+      echo -e " $CURRSUBNET...\n"
+      export LOCALVM=1
+   fi
    if [ "$SUBNET" = "" ]
    then
       [[ "$CURRSUBNET" = "" ]] && echo "Unable to find SUBNET from either config or current VM...exiting..." && exit 1
@@ -226,18 +269,24 @@ then
           if [ $? -ne 0 ]
           then
               echo -e "Error creating Azure Windows VM $VMNAME ... "
-              echo -e "Do you want to list all Azure VM image related to windows O/S? (y/n)"; read ANS
-              if [ "$ANS" = "y" ]
-              then
-                 echo -e "Gathering list of all Azure Windows VM image.. it may take a while.. please wait.."
-                 echo -e "The output list will also be written into logfile $LOGFILE ..."
-                 echo -e "Once you have found the image, then set VMIMAGE=the-urn-value within ${SCRIPTNAME}.env file, then re-run this script"
-                 az vm image list --offer windows --all -o table 2>&1 | tee -a $LOGFILE
-                 #az vm image list --query "[?contains(urn,'windows')]" --all -o table 2>&1 | tee -a $LOGFILE
-                 echo -e "\naz vm image list --offer windows --all -o table\n"
-                 echo -e "Exiting.. "
-                 exit 1
-             fi
+              CHECKERR=$(check_logfile "VMImage was not found|is currently not available in location")
+              if [ "$CHECKERR" != "" ]
+              then 
+                 echo -e "Do you want to list all Azure VM image related to windows O/S? (y/n)"; read ANS
+                 if [ "$ANS" = "y" ]
+                 then
+                    echo -e "Gathering list of all Azure Windows VM image.. it may take a while.. please wait.."
+                    echo -e "The output list will also be written into logfile $LOGFILE ..."
+                    echo -e "Once you have found the image, then set VMIMAGE=the-urn-value within ${SCRIPTNAME}.env file, then re-run this script"
+                    az vm image list --offer windows --location $LOCATION --all -o table 2>&1 | tee -a $LOGFILE
+                    #az vm image list --query "[?contains(urn,'windows')]" --location $LOCATION --all -o table 2>&1 | tee -a $LOGFILE
+                    echo -e "\naz vm image list --offer windows --all -o table\n"
+                    echo -e "Exiting.. "
+                 fi
+              else
+                 tail -20 $LOGFILE
+              fi
+              exit 1
           fi
           sleep 10
    
@@ -276,21 +325,26 @@ then
           if [ $? -ne 0 ]
           then
               echo -e "Error creating Azure Linux VM $VMNAME ... "
-              echo -e "Do you want to list all Azure VM image related to linux such as: centos,ubuntu and suse O/S? (y/n)"; read ANS
-              if [ "$ANS" = "y" ]
+              CHECKERR=$(check_logfile "VMImage was not found|is currently not available in location")
+              if [ "$CHECKERR" != "" ]
               then
-                 echo -e "Gathering list of all Azure Windows VM image.. it may take a while.. please wait.."
-                 echo -e "The output list will also be written into logfile ${LOGFILE}-CENTOS ${LOGFILE}-DEBIAN ${LOGFILE}-UBUNTU ${LOGFILE}-SUSE ..."
-                 echo -e "Once you have found the image, then set VMIMAGE=the-urn-value within ${SCRIPTNAME}.env file, then re-run this script"
-                 az vm image list -f CentOS --all -o table 2>&1 | tee -a ${LOGFILE}-CENTOS.txt &
-                 az vm image list -f Debian --all -o table 2>&1 | tee -a ${LOGFILE}-DEBIAN.txt &
-                 az vm image list -f Ubuntu --all -o table 2>&1 | tee -a ${LOGFILE}-UBUNTU.txt &
-                 az vm image list -f Suse --all -o table 2>&1 | tee -a ${LOGFILE}-SUSE.txt
-
-                 #az vm image list --query "[?contains(urn,'linux') || contains(urn,'centos') || contains(urn,'debian') || contains(urn,'ubuntu') || contains(urn,'suse')]" --all -o table 2>&1 | tee -a $LOGFILE
-                 echo -e "Exiting.. "
-                 exit 1
-             fi
+                 echo -e "Do you want to list all Azure VM image related to linux such as: centos,ubuntu and suse O/S? (y/n)"; read ANS
+                 if [ "$ANS" = "y" ]
+                 then
+                    echo -e "Gathering list of all Azure Windows VM image.. it may take a while.. please wait.."
+                    echo -e "The output list will also be written into logfile ${LOGFILE}-CENTOS ${LOGFILE}-DEBIAN ${LOGFILE}-UBUNTU ${LOGFILE}-SUSE ..."
+                    echo -e "Once you have found the image, then set VMIMAGE=the-urn-value within ${SCRIPTNAME}.env file, then re-run this script"
+                    az vm image list -f CentOS --location $LOCATION --all -o table 2>&1 | tee -a ${LOGFILE}-CENTOS.txt &
+                    az vm image list -f Debian --location $LOCATION --all -o table 2>&1 | tee -a ${LOGFILE}-DEBIAN.txt &
+                    az vm image list -f Ubuntu --location $LOCATION --all -o table 2>&1 | tee -a ${LOGFILE}-UBUNTU.txt &
+                    az vm image list -f Suse --location $LOCATION --all -o table 2>&1 | tee -a ${LOGFILE}-SUSE.txt
+                    #az vm image list --query "[?contains(urn,'linux') || contains(urn,'centos') || contains(urn,'debian') || contains(urn,'ubuntu') || contains(urn,'suse')]" --all -o table 2>&1 | tee -a $LOGFILE
+                    echo -e "Exiting.. "
+                 fi
+              else
+                 tail -20 $LOGFILE
+              fi
+              exit 1
           fi
           sleep 10
      fi
@@ -300,8 +354,12 @@ else
 
 fi
 
-
-FULLVMNAME=${VMNAME}.${LOCATION}.cloudapp.azure.com
+if [ "$LOCALVM" = "1" ]
+then
+   FULLVMNAME=${VMNAME}
+else
+   FULLVMNAME=${VMNAME}.${LOCATION}.cloudapp.azure.com
+fi
 
 echo -n "Checking whether $VMNAME is Running...."
 ISRUNNING=`az vm show --name $VMNAME -g $RESOURCEGROUP  -d --query "powerState" 2>>$LOGFILE | sed 's/["\n\r]//g'`
@@ -407,6 +465,7 @@ then
    echo -e "\nWindows VM $VMNAME has been deployed successfully...\n"
 else
    echo -n "Connecting to Linux VM $VMNAME using ssh..."
+   ssh-keygen -R "$FULLVMNAME" 2>&1 >/dev/null 
    ssh -o "StrictHostKeyChecking no" ${ADMINUSER}@${FULLVMNAME} "hostname;who am i"
    if [ $? -ne 0 ]
    then
@@ -427,42 +486,46 @@ echo \"$ADMINPASSWORD\" | sudo -S su - root -c \"[[ ! -d /root/.ssh ]] && mkdir 
       echo -n "$ERRMSG ...."
       if [ "$ERRMSG" != "" ]
       then
-         THEUSER=$(echo "$ERRMSG" | sed "s/.*Please login as the user \"\([a-zA-Z0-9]\+\)\" .*/\1/g")
-         echo -n "Creating /opt filesystem on Linux VM $VMNAME using user $THEUSER remotely..."
+         export THEUSER=$(echo "$ERRMSG" | sed "s/.*Please login as the user \"\([a-zA-Z0-9]\+\)\" .*/\1/g")
          ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
 set -x
 DISK=\`sudo lsblk -no NAME | grep -Ev \"\$(sudo blkid | sed \"s/^\/dev\/\([a-zA-Z]\+\).*/\1/g\")|sr0|fd0\" | tail -1\`
 if [ \"\$DISK\" != \"\" ]
 then
-   echo \"Creating /opt disk....\"
-   echo yes | sudo mkfs.ext4 /dev/\$DISK
-   echo \"/dev/\$DISK /opt ext4 defaults 0 0\" | sudo tee -a /etc/fstab
+   echo \"Disk is available....\"
+   touch /tmp/testing.tmp
 fi
-sudo mount /opt
 "
-         [[ $? -ne 0 ]] && echo -e "\nError creating filesystem /opt on VM $VMNAME ( $FULLVMNAME ).... " && exit 1
-         echo -e "mounting /opt filesystem..... OK\n"
+         [[ $? -ne 0 ]] && echo -e "\nError executing touch command on VM $VMNAME ( $FULLVMNAME ).... " && exit 1
+         echo -e "Executing command remotely using user $THEUSER..... OK\n"
          echo -e "\nLinux VM $VMNAME has been deployed successfully...\n"
-
-             
       else
-         echo -n "Unable to create /opt filesystem on Linux VM $VMNAME using remote shell...you can do it manually!!"
+         echo -n "Unable to execute command on Linux VM $VMNAME using remote shell...you can do it manually!!"
       fi
    else
-      echo -n "Creating /opt filesystem on Linux VM $VMNAME using remote shell..."
-      ssh -o "StrictHostKeyChecking no" root@${FULLVMNAME} "
+      export THEUSER="root"
+      echo -n "Executing command on Linux VM $VMNAME using remote shell..."
+      ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
 set -x
 DISK=\`lsblk -no NAME | grep -Ev \"\$(blkid | sed \"s/^\/dev\/\([a-zA-Z]\+\).*/\1/g\")|sr0|fd0\" | tail -1\`
 if [ \"\$DISK\" != \"\" ]
 then
-   echo \"Creating /opt disk....\"
-   echo yes | mkfs.ext4 /dev/\$DISK
-   echo \"/dev/\$DISK /opt ext4 defaults 0 0\" >> /etc/fstab
+   echo \"Disk is available....\"
+   touch /tmp/testing.tmp
 fi
-mount /opt
 "
-      [[ $? -ne 0 ]] && echo -e "\nError creating filesystem /opt on VM $VMNAME ( $FULLVMNAME ).... " && exit 1
-      echo -e "Mounting /opt filesystem... OK\n"
+      [[ $? -ne 0 ]] && echo -e "\nError executing touch command on VM $VMNAME ( $FULLVMNAME ).... " && exit 1
+      echo -e "\nExecuting command remotely using user $THEUSER..... OK\n"
       echo -e "\nLinux VM $VMNAME has been deployed successfully...\n"
    fi
+   for ADDONS in `ls -1 ${SCRIPTNAME}.addon.* 2>/dev/null`
+   do
+      echo "Running addons $ADDONS ..."
+      source $ADDONS
+      run_addon
+   done
+
 fi
+
+
+
