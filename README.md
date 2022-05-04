@@ -1,4 +1,25 @@
 # Collection of Azure-CLI automations
+
+Any of the following Azure-cli will perform fully automated installation end to end until the environment is ready to use, the automation steps can be divided into the following:
+- Based on createazvm.env, it will retrieve all necessary information to deploy VM on azure such as subscription, resource group, vnet, etc
+- If some components are not available then the script will create them, such as: resource group, vnet, network interface and VM
+- After the VM is fully created and running then the addon script will be executed to perform any post-deployment activities
+- one of the addon that is available here will install kubernetes master and N number of worker nodes, let say you have specified 1 master with 100 worker ndoes then the script will create 101 VM and then use 1 node as a master (the name must be specified in a config file) and 100 worker nodes (the base name must be specified E.g: lxworker, then it will create lxworker1, lxwoker2 until lxworker100)
+- The kubernetes installation script setup-k8scrio.sh has been decoded into base64 and it is included into the addon script which will be executed after 101 VM nodes are completely deployed
+- All ssh trusted connections between worker nodes and master node also included in the script, the end result will be kubernetes 1 master and 100 worker nodes are ready to use
+
+## Deploy Azure VM (either Windows or Linux VM) with addon scripts
+### Pre-requisites
+- Update createazvm.env file with Azure VM specifications (see createazvm.env)
+- Run createazvm.sh script on Linux (bash script), the env file above must be located on the same directoy as the bash script
+- Create createazvm.addon.xxxxxxxx script, this script will be run after createazvm.sh is executed
+
+### Included Addons
+- Fully automated installation of additional data disk
+- Fully automated installation of cubefs master and worker nodes
+- Fully automated installation of kubernetes (crio library) with 1 master node and configurable no of worker nodes
+
+
 ## Deploy Azure VM, install Windows 10, SSMA, SSMS and Oracle Instantclient 19c (In one go)
 ### Pre-requisites
 - Update crazvmssma.env file with Azure VM specifications (see crazvmssma.env)
