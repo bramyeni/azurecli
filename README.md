@@ -36,6 +36,13 @@ export NOOFWORKERS=100
 </pre>
 NOTE: this process will run as it explained above, so there will be lxmonitor, lxmaster and lxworker1 upto lxworker100 ready to run, the lxmonitor then can be deleted or it can be kept as a jumpbox 
 
+## Delete Azure VM including underlying components
+- Delete multiple VM by specifiying comma separated between VM name to be deleted (without space)
+<pre>
+./delazvm.sh lxmonitor,lxmaster,lxworker1,lxworker2,lxworker3
+</pre>
+NOTE: the above command will delete all the above VMs including all underlying components such as: disk, network interface, public-ip, nsg, etc
+
 ## Deploy Azure VM, install Windows 10, SSMA, SSMS and Oracle Instantclient 19c (In one go)
 ### Pre-requisites
 - Update crazvmssma.env file with Azure VM specifications (see crazvmssma.env)
