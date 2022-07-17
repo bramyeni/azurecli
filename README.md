@@ -18,9 +18,9 @@ Any of the following Azure-cli will perform fully automated installation end to 
 - Create createazvm.addon.xxxxxxxx script, this script will be run after createazvm.sh is executed
 
 ### Included Addons
-- Fully automated installation of additional data disk
-- Fully automated installation of cubefs master and worker nodes
-- Fully automated installation of kubernetes (crio library) with 1 master node and configurable no of worker nodes
+- Fully automated installation of multiple servers with additional data disk (createazvm.addon.multiservers)
+- Fully automated installation of cubefs master and worker nodes (createazvm.addon.cebefs)
+- Fully automated installation of kubernetes complete cluster 1 master and N number of worker ndoes fully automated (createazvm.addon.installk8s)
 
 ### Deploy Kubernetes with 100 worker nodes
 - Modified createazvm.addon.installk8s to have the following
@@ -34,7 +34,10 @@ export NOOFWORKERS=100
 <pre>
 ./createazvm.sh lxmonior
 </pre>
-NOTE: this process will run as it explained above, so there will be lxmonitor, lxmaster and lxworker1 upto lxworker100 ready to run, the lxmonitor then can be deleted or it can be kept as a jumpbox 
+NOTE: 
+- This process will run as it explained above, so there will be lxmonitor, lxmaster and lxworker1 upto lxworker100 running complete kubernetes cluster, the lxmonitor then can be deleted or it can be kept as a jumpbox 
+- All lxmaster and lxworker(N) will not have public-ip, therefore keeping lxmonitor above is good as jumpbox to connect to this kubernetes cluster
+- The above kubernetes installation script is gathered from my bash script collection https://github.com/bramyeni/bash-scripts 
 
 ## Delete Azure VM including underlying components
 - Delete multiple VM by specifiying comma separated between VM name to be deleted (without space)
