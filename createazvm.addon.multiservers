@@ -1,0 +1,150 @@
+# $Id: createazvm.addon.cubefs 445 2022-03-28 11:27:23Z bpahlawa $
+# initially created by Bram Pahlawanto 25-June-2020
+# This is the list of parameters to deploy VM and SQL BDC fully automated
+# $Author: bpahlawa $
+# Modified by: bpahlawa
+# $Date: 2022-03-28 19:27:23 +0800 (Mon, 28 Mar 2022) $
+# $Revision: 445 $
+
+export THEUSER
+export FULLVMNAME
+export K8SMASTER=lxubmaster
+export K8SNODE=lxubworker
+export NOOFWORKERS=2
+export KUBEADM_JOIN_CMD=""
+
+creating_disk()
+{
+   local MOUNTPOINT="$1"
+   echo -n "Creating $MOUNTPOINT filesystem on Linux VM $VMNAME using user $THEUSER remotely..."
+   ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
+   [[ \$(mount | grep \"$MOUNTPOINT \" | grep -v grep | wc -l) -ne 0 ]] && echo \"mountpoint $MOUNTPOINT has been created!!\" && exit 1
+DISK=\`sudo lsblk -no NAME | grep -Ev \"\$(sudo blkid | sed \"s/^\/dev\/\([a-zA-Z]\+\).*/\1/g\")|sr0|fd0\" | tail -1\`
+if [ \"\$DISK\" != \"\" ]
+then
+   echo \"Creating $MOUNTPOINT disk....\"
+   mkdir -p $MOUNTPOINT
+   which mkfs.xfs 1>&2 >/dev/null  
+   if [ \$? -ne 0 ]
+   then
+      echo yes | sudo mkfs.ext4 /dev/\$DISK
+      FSTYPE=ext4
+   else
+      echo yes | sudo mkfs.xfs /dev/\$DISK
+      FSTYPE=xfs
+   fi
+   DISKUUID=\$(blkid /dev/\$DISK | awk '{print \$2}')
+   echo \"\$DISKUUID $MOUNTPOINT \$FSTYPE defaults 0 0\" | sudo tee -a /etc/fstab
+fi
+sudo mount $MOUNTPOINT
+if [ \$? -ne 0 ]
+then
+   echo \"Error creating filesystem $MOUNTPOINT on VM $VMNAME ( $FULLVMNAME ).... \" 
+   exit 1
+else
+   echo \"mounting $MOUNTPOINT filesystem..... OK\"
+   echo \"$MOUNTPOINT has been created and mounted successfully...\"
+fi
+"
+
+}
+
+generate_ssh_key()
+{
+    ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
+hostname
+[[ ! -f ~/.ssh/id_rsa ]] && ssh-keygen -f ~/.ssh/id_rsa -N \"\" || echo \"id_rsa and id_rsa.pub have been generated!!\"
+"
+}
+
+install_packages()
+{
+   ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
+hostname
+apt-get update
+apt-get -y upgrade
+"
+}
+
+
+copy_createazvm()
+{
+   scp createazvm.env ${THEUSER}@${FULLVMNAME}:~
+   scp createazvm.sh ${THEUSER}@${FULLVMNAME}:~
+   scp createazvm.addon.multiservers ${THEUSER}@${FULLVMNAME}:~/remotescript.sh
+}
+
+run_createazvm()
+{
+   ssh -o "StrictHostKeyChecking no" ${THEUSER}@${FULLVMNAME} "
+hostname
+./createazvm.sh $K8SMASTER
+W=0
+while [[ \$W -lt $NOOFWORKERS ]]
+do
+  W=\$(( W + 1 ))
+  ./createazvm.sh "${K8SNODE}\${W}"
+done
+source ~/remotescript.sh
+remote_run
+"
+}
+
+
+remote_check_createvm_log()
+{
+  local NODENAME="$1"
+  if [ $(tail -1 /tmp/createazvm.sh-${NODENAME}.log | grep "^ERROR:" | wc -l) -eq 0 ]
+  then
+     return 0
+  else
+     tail -1 /tmp/createazvm.sh-${NODENAME}.log
+     return 1
+  fi
+}
+   
+
+remote_run()
+{
+  export THEUSER=root
+  export FULLVMNAME=${K8SMASTER}
+  creating_disk "/opt"
+  remote_check_createvm_log "$K8SMASTER"
+  [[ $? -ne 0 ]] && exit 1
+
+  W=0
+  while [[ $W -lt $NOOFWORKERS ]]
+  do
+     W=$(( W + 1 ))
+     remote_check_createvm_log "${K8SNODE}${W}"
+     if [ $? -eq 0 ]
+     then
+        export FULLVMNAME=${K8SNODE}${W}
+        creating_disk "/opt"
+        generate_ssh_key
+     else
+        echo "Error in creating VM ${K8SNODE}${W}"
+     fi
+  done
+
+  W=0
+  while [[ $W -lt $NOOFWORKERS ]]
+  do
+     W=$(( W + 1 ))
+     remote_check_createvm_log "${K8SNODE}${W}"
+     if [ $? -ne 0 ]
+     then
+        echo "Skipping VM ${K8SNODE}${W} ..."
+     fi
+  done
+}
+
+
+run_addon()
+{
+   generate_ssh_key
+   install_packages
+   copy_createazvm
+   run_createazvm
+}
+

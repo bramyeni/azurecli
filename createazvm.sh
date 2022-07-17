@@ -1,10 +1,10 @@
 #!/bin/bash
-# $Id: createazvm.sh 449 2022-04-29 02:10:08Z bpahlawa $
+# $Id: createazvm.sh 460 2022-07-17 05:05:47Z bpahlawa $
 # initially created by Bram Pahlawanto 25-June-2020
 # $Author: bpahlawa $
 # Modified by: bpahlawa
-# $Date: 2022-04-29 10:10:08 +0800 (Fri, 29 Apr 2022) $
-# $Revision: 449 $
+# $Date: 2022-07-17 13:05:47 +0800 (Sun, 17 Jul 2022) $
+# $Revision: 460 $
 
 LOGFILE=/tmp/$0.log
 THISVM=$(hostname)
@@ -47,8 +47,38 @@ CURRDIR=$(pwd)
 echo -n "Checking az command has been installed....."
 [[ -d $CURRDIR/bin ]] && export PATH=$CURRDIR/bin:$PATH
 
-az 2>/dev/null 1>/dev/null
-if [ $? -ne 0 ]
+
+az --version &
+sleep 2
+CTR=1
+PID=$(ps -ef | egrep "az \-\-version| azure\-cli " | grep -v grep | awk '{print $2}')
+while [ $CTR -le 4 -a "$PID" != "" ]
+do
+  echo "az or azure-cli is running.............................................."
+  PID=$(ps -ef | egrep "az \-\-version| azure\-cli " | grep -v grep | awk '{print $2}')
+  CTR=$(( CTR + 1 )) 
+  sleep 2 
+done
+
+PID=$(ps -ef | egrep "az \-\-version| azure\-cli " | grep -v grep | awk '{print $2}')
+if [ $CTR -ge 4 ]
+then
+  while [ "$PID" != "" ]
+  do
+     PID=$(ps -ef | egrep "az | azure\.cli " | grep -v grep | awk '{print $2}')
+     for PID in $(ps -ef | egrep "az | azure\-cli " | grep -v grep | awk '{print $2}')
+     do
+       kill $PID
+     done
+  done
+  AZLOC=$(which az)
+  AZDIR=$(dirname $AZLOC)
+  [[ -d $AZDIR ]] && rm -rf $AZDIR
+  REINSTALLAZ=1
+fi
+
+
+if [ "$REINSTALLAZ" = "1" ]
 then
    [[ -d ~/lib/azure-cli ]] && rm -rf ~/lib/azure-cli
    curl -L https://aka.ms/InstallAzureCli -o installaz 
@@ -68,20 +98,6 @@ else
   fi
 fi
 export PATH=$(pwd)/bin:$PATH
-
-az --version &
-CTR=1
-PID=$(ps -ef | grep "az --version" | grep -v grep | awk '{print $2}')
-while [ $CTR -lt 10 -a $PID != "" ]
-do
-  CTR=$(( CTR + 1 )) 
-  sleep 3 
-done
-
-if [ $(ps -ef | grep "az --version" | grep -v grep | wc -l) -ne 0 ]
-then
-  [[ "$PID" != "" ]] && kill $PID
-fi
 
 cd $CURRDIR
 
@@ -234,15 +250,17 @@ then
    echo -e " OK\n"
 
 
-   echo -n "Creating Public-IP ${VMNAME}_publicip...."
-   az network public-ip create -n ${VMNAME}_publicip -g $RESOURCEGROUP --dns-name $VMNAME --reverse-fqdn "${VMNAME}.${LOCATION}.cloudapp.azure.com" -l $LOCATION --allocation-method Static 2>>$LOGFILE 1>/dev/null
-   [[ $? -ne 0 ]] && echo -e "\nFailed to create Public-IP ${VMNAME}_publicip ...exiting.." && exit 1
-   echo -e " OK\n"
-   
-   echo -n "Creating NIC ${NICNAME}...."
-   az network nic create -n ${NICNAME} -g $RESOURCEGROUP --subnet $SUBNET --vnet-name $VNET -l $LOCATION --public-ip-address ${VMNAME}_publicip  2>>$LOGFILE 1>/dev/null
+   if [ "$ISCURRVMAZURE" = "1" ]
+   then
+      echo -n "Creating NIC ${NICNAME} without public ip ...."
+      az network nic create -n ${NICNAME} -g $RESOURCEGROUP --subnet $SUBNET --vnet-name $VNET -l $LOCATION 2>>$LOGFILE 1>/dev/null
+   else
+      echo -n "Creating NIC ${NICNAME} with public ip ${VMNAME}_publicip ...."
+      az network nic create -n ${NICNAME} -g $RESOURCEGROUP --subnet $SUBNET --vnet-name $VNET -l $LOCATION --public-ip-address ${VMNAME}_publicip  2>>$LOGFILE 1>/dev/null
+   fi
    [[ $? -ne 0 ]] && echo -e "\nFailed to create NIC ${NICNAME} ...exiting.." && exit 1
    echo -e " OK\n"
+ 
 
    echo -n "Creating Data DISK ${VMNAME}_${DATADISK0} size $DATADISKSIZE Gb...."
    az disk create -g $RESOURCEGROUP -n ${VMNAME}_${DATADISK0} --size-gb $DATADISKSIZE --sku Premium_LRS -l $LOCATION 2>>$LOGFILE 1>/dev/null
@@ -351,7 +369,16 @@ then
 
 else
   echo -e " OK\n"
-
+  echo -n "Retrieving VNET information from current VM $THISVM...."
+  CURRNIC=`az vm nic list --vm-name $THISVM -g $RESOURCEGROUP --query "[].id" -o tsv 2>>$LOGFILE`
+  if [ "$CURRNIC" != "" ]
+  then
+     ISCURRVMAZURE=1
+     LOCALVM=1
+  else
+     LOCALVM=0
+     ISCURRVMAZURE=0
+  fi
 fi
 
 if [ "$LOCALVM" = "1" ]
@@ -374,8 +401,16 @@ then
 fi
 echo -e "OK\n"
 
+
+
 if [ "$ISCURRVMAZURE" = "0" ]
 then
+
+   echo -n "Creating Public-IP ${VMNAME}_publicip...."
+   az network public-ip create -n ${VMNAME}_publicip -g $RESOURCEGROUP --dns-name $VMNAME --reverse-fqdn "${VMNAME}.${LOCATION}.cloudapp.azure.com" -l $LOCATION --allocation-method Static 2>>$LOGFILE 1>/dev/null
+   [[ $? -ne 0 ]] && echo -e "\nFailed to create Public-IP ${VMNAME}_publicip ...exiting.." && exit 1
+   echo -e " OK\n"
+   
    echo -n "Creating NSG $NSGNAME......."
    az network nsg create -n ${NSGNAME} -g $RESOURCEGROUP -l $LOCATION 2>>$LOGFILE 1>/dev/null
    [[ $? -ne 0 ]] && echo "\nError creating NSG ${NSGNAME}...exiting..." && exit 1
@@ -405,6 +440,22 @@ then
 --destination-address-prefixes '*' --destination-port-ranges 3389 --access Allow \
 --protocol Tcp --description "Allow RDP port 3389" 2>>$LOGFILE 1>/dev/null
       [[ $? -ne 0 ]] && echo -e "\nError adding RDP rule to NSG $NSGNAME ......exiting.... " && exit 1
+      echo -e " OK\n"
+
+      echo -n "Checking addition NSG called $NSG2"
+      NSG2=$(az network nsg list -g $RESOURCEGROUP -o table | grep $VNET | awk '{print $2}')
+
+      PORTNO=3389
+      echo -n "Adding Terminal service rule to NSG ${NSG2}....."
+      CURRPRIORITY=$(az network nsg list -g $RESOURCEGROUP --query "[].securityRules[]" -o tsv | grep "${NSG2}" | awk '{print $(NF-9)}' | tail -1)
+      [[ "$CURRPRIORITY" = "" || $CURRPRIORITY -ge 4096 ]] && PRIORITY=1000 || PRIORITY=$(( CURRPRIORITY + 1 ))
+      az network nsg rule create -g $RESOURCEGROUP --nsg-name $NSG2 -n ${NSG2}_port${PORTNO} --priority $PRIORITY \
+--source-address-prefixes $PUBLICIPADDR --source-port-ranges '*' \
+--destination-address-prefixes '*' --destination-port-ranges ${PORTNO} --access Allow \
+--protocol Tcp --description "Allow port $PORTNO" 2>>$LOGFILE 1>/dev/null
+      [[ $? -ne 0 ]] && echo -e "\nError adding Port ${PORTNO} to NSG $NSGNAME ......exiting.... " && exit 1
+      echo -e " OK\n"
+
    else
       typeset -u AUTHMECH
       AUTHMECH=$AUTHMECH
@@ -452,6 +503,21 @@ then
 --protocol Tcp --description "Allow SSH port 22" 2>>$LOGFILE 1>/dev/null
       [[ $? -ne 0 ]] && echo -e "\nError adding SSH rule to NSG $NSGNAME ......exiting.... " && exit 1
       echo -e " OK\n"
+
+      echo -n "Checking addition NSG called $NSG2"
+      NSG2=$(az network nsg list -g $RESOURCEGROUP -o table | grep $VNET | awk '{print $2}')
+
+      echo -n "Adding SSH rule to NSG ${NSG2}....."
+      PORTNO=22
+      CURRPRIORITY=$(az network nsg list -g $RESOURCEGROUP --query "[].securityRules[]" -o tsv | grep "${NSG2}" | awk '{print $(NF-9)}' | tail -1)
+      [[ "$CURRPRIORITY" = "" || $CURRPRIORITY -ge 4096 ]] && PRIORITY=1000 || PRIORITY=$(( CURRPRIORITY + 1 ))
+      az network nsg rule create -g $RESOURCEGROUP --nsg-name $NSG2 -n ${NSG2}_port${PORTNO} --priority $PRIORITY \
+--source-address-prefixes $PUBLICIPADDR --source-port-ranges '*' \
+--destination-address-prefixes '*' --destination-port-ranges ${PORTNO} --access Allow \
+--protocol Tcp --description "Allow port ${PORTNO}" 2>>$LOGFILE 1>/dev/null
+      [[ $? -ne 0 ]] && echo -e "\nError adding Port ${PORTNO} to NSG $NSGNAME ......exiting.... " && exit 1
+      echo -e " OK\n"
+
    fi
 
    echo -n "Updating NIC $NICNAME...."
